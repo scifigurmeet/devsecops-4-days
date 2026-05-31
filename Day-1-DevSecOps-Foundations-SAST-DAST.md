@@ -59,6 +59,21 @@ flowchart LR
 
 Complete this section before starting Module 1. Everything we use runs on Docker so that every machine behaves identically.
 
+> [!IMPORTANT]
+> **🖥 Shell & path differences — read this first.** Docker commands that touch the file system or environment are shown for both **🐧 Linux/macOS** (bash) and **🪟 Windows CMD**. Commands not shown twice (e.g. `git`, `npm`, `node`, single-line `docker build`) are identical on both platforms. The differences are purely mechanical:
+>
+> | Concept | 🐧 Linux / macOS (bash) | 🪟 Windows (CMD) |
+> |---|---|---|
+> | Current folder | `$(pwd)` | `%cd%` |
+> | Multi-line command | end each line with `\` | keep it on **one line** |
+> | Set a variable | `export VAR=value` | `set VAR=value` |
+> | Read a variable | `$VAR` | `%VAR%` |
+> | Last exit code | `echo $?` | `echo %errorlevel%` |
+> | Mount the Docker socket | `/var/run/docker.sock` | `//var/run/docker.sock` |
+> | `host.docker.internal` | add `--add-host=host.docker.internal:host-gateway` | works natively — omit the flag |
+>
+> **PowerShell** users: current folder is `${PWD}`, variables are `$env:VAR`.
+
 ### What we install and why
 
 ```mermaid
@@ -485,7 +500,7 @@ flowchart LR
 | Finds | Insecure code patterns, hardcoded secrets | Runtime flaws, misconfig, real exploits |
 | Needs | The code | A URL |
 | When in pipeline | Early (on commit/build) | Later (on a deployed test env) |
-| Tools | **SonarQube**, Checkmarx | **OWASP ZAP**, Burp Suite |
+| Tools | **SonarQube**, **Semgrep**, Checkmarx | **OWASP ZAP**, Burp Suite |
 
 > 💡 **They're complementary, not rivals.** SAST sees the recipe; DAST tastes the dish. Both are needed.
 
@@ -520,6 +535,7 @@ docker run -d --name sonarqube -p 9000:9000 sonarqube:community
 
 The scanner also runs in Docker, so nothing extra is installed:
 
+**🐧 Linux / macOS**
 ```bash
 # Run from INSIDE the vulnportal folder
 docker run --rm \
@@ -529,25 +545,43 @@ docker run --rm \
   sonarsource/sonar-scanner-cli \
   -Dsonar.projectKey=vulnportal
 ```
+**🪟 Windows (CMD)** — one line, `%cd%` for the folder
+```bat
+docker run --rm -e SONAR_HOST_URL="http://host.docker.internal:9000" -e SONAR_TOKEN="PASTE_YOUR_TOKEN_HERE" -v "%cd%:/usr/src" sonarsource/sonar-scanner-cli -Dsonar.projectKey=vulnportal
+```
 
 > 🧯 **Linux note:** `host.docker.internal` may not resolve. Either add `--add-host=host.docker.internal:host-gateway`, or use the machine's LAN IP, or run with `--network host` and `SONAR_HOST_URL=http://localhost:9000`.
 > 🪟/🍎 **Windows/Mac:** `host.docker.internal` works out of the box.
 
+> 🧯 **"Uncovered code" / 0% coverage is expected here — and is *not* a security result.** Coverage measures how much code your *unit tests* exercise; VulnPortal has none, so SonarQube shows 0% and paints every line "uncovered." It does **not** hide vulnerabilities. To stop it failing the default Quality Gate during the lab, drop a `sonar-project.properties` in the project folder containing `sonar.coverage.exclusions=**/*` (this removes the file from *coverage* only — it is still fully scanned for security). Do **not** use `sonar.exclusions`, which would skip analysis entirely and hide the findings.
+
 ### 🧪 Lab 5.4 — Read the results & fix them
 
-Open `http://localhost:9000` → project `vulnportal` → **Issues** tab. Expect findings such as:
+Open `http://localhost:9000` → project `vulnportal`. **Look in two places, not one:** the **Issues** tab *and* the **Security Hotspots** tab — SonarQube files most injection, crypto, and secret patterns as *hotspots* ("review required"), not as confirmed Issues. If you only check Issues → Vulnerabilities it can look empty even though findings exist.
+
+Here is what the **Community Edition** actually surfaces for VulnPortal:
 
 ```mermaid
 flowchart TD
-    R[SonarQube Report] --> I1[🔴 Hardcoded secret<br/>API_SECRET]
-    R --> I2[🔴 SQL Injection<br/>string-built query]
-    R --> I3[🟠 Weak hashing<br/>MD5 used]
-    R --> I4[🟠 XSS<br/>unescaped output]
-    style I1 fill:#fee2e2
-    style I2 fill:#fee2e2
-    style I3 fill:#ffedd5
-    style I4 fill:#ffedd5
+    R[VulnPortal scan] --> H[✅ Security Hotspots<br/>Community Edition finds these]
+    R --> X[❌ Needs taint analysis<br/>Developer Edition+ only]
+    H --> H1[🟠 Weak hashing · MD5]
+    H --> H2[🟠 Express version disclosure]
+    H --> H3[🟠 Hardcoded secret<br/>after rule tweak — see below]
+    X --> X1[🔴 SQL Injection]
+    X --> X2[🔴 Reflected XSS]
+    style H fill:#dcfce7,stroke:#16a34a
+    style X fill:#f3f4f6,stroke:#9ca3af
+    style H1 fill:#ffedd5
+    style H2 fill:#ffedd5
+    style H3 fill:#ffedd5
+    style X1 fill:#fee2e2
+    style X2 fill:#fee2e2
 ```
+
+> ⚠️ **Important — a real edition limit, not a bug or a missed setting.** SonarQube **Community Edition has only pattern-based rules**. It does **not** include *taint analysis* (tracking untrusted input from where it enters to where it's used) — and taint analysis is exactly what detects **SQL injection and XSS**. That engine is a paid feature (**Developer Edition and up**), so those two flaws will **never** appear in the free edition, however you configure it. This is the cleanest possible illustration of the SAST ↔ DAST point: the **ZAP scan in Module 6 catches precisely the SQLi and XSS that Community SonarQube cannot** — which is *why you run both*. To catch them with a *free SAST* tool too, see §5.4 (Semgrep) below.
+>
+> 🔑 **Why the hardcoded secret isn't flagged by default:** rule **S2068**'s watched words are `password, passwd, pwd, passphrase` — `API_SECRET` isn't among them, and the made-up value isn't a recognized provider-token format. To make it appear, either rename the variable to contain one of those words (e.g. `dbPassword`), **or** add `secret,token,apikey` to S2068's `credentialWords` parameter (Quality Profiles → your JS profile → rule S2068), then re-scan.
 
 Now fix the code. Replace the vulnerable parts of `app.js`:
 
@@ -573,9 +607,34 @@ app.get('/search', (req, res) => {
 //   const hashed = await bcrypt.hash('admin123', 12);
 ```
 
-> 🧪 **Re-scan** (repeat Lab 5.3) and watch the issue count drop. Proving a fix worked is the core of DevSecOps.
+> 🧪 **Re-scan** (repeat Lab 5.3) and watch the hotspot count drop. Proving a fix worked is the core of DevSecOps. (To confirm the SQLi/XSS fixes too, use the Semgrep scan in §5.4 — Community SonarQube won't show those.)
 
-## 5.4 Checkmarx (conceptual)
+## 5.4 Catch injection & XSS for free — Semgrep
+
+Because Community SonarQube can't see SQL injection or XSS (no taint analysis), pair it with **Semgrep** — a free, open-source SAST tool whose rules *do* trace these source-to-sink patterns. (Semgrep is also the SAST step in the Day 4 pipeline, so this is the same tool you'll automate later.)
+
+**🐧 Linux / macOS**
+```bash
+docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep --config=p/owasp-top-ten /src
+```
+**🪟 Windows (CMD)**
+```bat
+docker run --rm -v "%cd%:/src" semgrep/semgrep semgrep --config=p/owasp-top-ten /src
+```
+
+> ✅ **Expected:** Semgrep reports findings on the unescaped output (XSS) and the string-built SQL query — the very flaws Community SonarQube skipped. Apply the fixes above, re-run, and those findings disappear.
+
+> 💡 **The takeaway for the room — no single free tool catches everything:**
+>
+> | Tool | Catches in VulnPortal | Misses |
+> |---|---|---|
+> | **SonarQube CE** | MD5 hotspot, version disclosure, hardcoded secret (after tweak) | SQL injection, XSS |
+> | **Semgrep** | SQL injection, XSS | (depends on rule set) |
+> | **OWASP ZAP** (Module 6) | SQL injection, XSS — *confirmed at runtime* | source-only issues like the secret |
+>
+> Layering SAST tools **and** DAST is the whole point of DevSecOps — each angle covers another's blind spot.
+
+## 5.5 Checkmarx (conceptual)
 
 Many enterprises license **Checkmarx (CxSAST / Checkmarx One)**. It is not installed here, but the workflow is the same idea as SonarQube:
 
@@ -622,12 +681,17 @@ flowchart LR
 
 Ensure VulnPortal is running (`node app.js`), then:
 
+**🐧 Linux / macOS**
 ```bash
-# ZAP baseline scan against the app (passive + light active checks)
+# ZAP baseline scan (Linux needs --add-host so the container can reach the host)
 docker run --rm -t \
   --add-host=host.docker.internal:host-gateway \
   ghcr.io/zaproxy/zaproxy:stable \
   zap-baseline.py -t http://host.docker.internal:3000 -I
+```
+**🪟 Windows (CMD)** — no `--add-host` needed, one line
+```bat
+docker run --rm -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://host.docker.internal:3000 -I
 ```
 
 > ✅ **Expected:** ZAP prints a list of alerts — likely **Cross-Site Scripting (Reflected)**, **missing security headers** (`Content-Security-Policy`, `X-Content-Type-Options`), and more. The `-I` flag means "do not fail the run on warnings."
@@ -682,14 +746,15 @@ flowchart LR
 
 ### 📋 Capstone checklist
 
-- [ ] Run SonarQube on VulnPortal — record the issue count.
-- [ ] Run ZAP baseline on the running app — record the alert count.
+- [ ] Run SonarQube on VulnPortal (check **Issues *and* Security Hotspots**) — record the count. Remember: Community Edition shows the MD5 hotspot, version disclosure, and the secret (after the S2068 tweak), but **not** SQLi/XSS.
+- [ ] Run **Semgrep** to catch the SQL injection and XSS that SonarQube CE misses.
+- [ ] Run ZAP baseline on the running app — record the alert count (this confirms SQLi/XSS at runtime).
 - [ ] Fix **all four** known vulnerabilities (SQLi, XSS, hardcoded secret, MD5).
-- [ ] Re-run **both** scans.
+- [ ] Re-run **all** scans.
 - [ ] Capture a **before/after** screenshot of the counts.
-- [ ] Write 2 lines per vulnerability: *what it was* and *how it was fixed*.
+- [ ] Write 2 lines per vulnerability: *what it was*, *how it was fixed*, and *which tool caught it*.
 
-> ✅ **Success criteria:** the SonarQube high-severity count and the ZAP high-risk count both drop to near zero, and each fix can be explained in plain English.
+> ✅ **Success criteria:** the SonarQube hotspot count, the Semgrep finding count, and the ZAP high-risk count all drop to near zero, and each fix can be explained in plain English — including which tool detected it and why.
 
 ---
 
@@ -744,27 +809,28 @@ flowchart LR
 
 # 🧾 Day 1 Command Cheat-Sheet
 
+**🐧 Linux / macOS**
 ```bash
-# Verify environment
 git --version && docker --version && node --version
-
-# Run the sample app
 node app.js                               # http://localhost:3000
-
-# SonarQube server
 docker run -d --name sonarqube -p 9000:9000 sonarqube:community
-
-# SonarScanner (from project folder)
 docker run --rm -e SONAR_HOST_URL="http://host.docker.internal:9000" \
   -e SONAR_TOKEN="TOKEN" -v "$(pwd):/usr/src" \
   sonarsource/sonar-scanner-cli -Dsonar.projectKey=vulnportal
-
-# OWASP ZAP baseline scan
+docker run --rm -v "$(pwd):/src" semgrep/semgrep semgrep --config=p/owasp-top-ten /src
 docker run --rm -t --add-host=host.docker.internal:host-gateway \
   ghcr.io/zaproxy/zaproxy:stable \
   zap-baseline.py -t http://host.docker.internal:3000 -I
-
-# Bonus target: OWASP Juice Shop
+docker run -d -p 3001:3000 bkimminich/juice-shop
+```
+**🪟 Windows (CMD)**
+```bat
+git --version && docker --version && node --version
+node app.js
+docker run -d --name sonarqube -p 9000:9000 sonarqube:community
+docker run --rm -e SONAR_HOST_URL="http://host.docker.internal:9000" -e SONAR_TOKEN="TOKEN" -v "%cd%:/usr/src" sonarsource/sonar-scanner-cli -Dsonar.projectKey=vulnportal
+docker run --rm -v "%cd%:/src" semgrep/semgrep semgrep --config=p/owasp-top-ten /src
+docker run --rm -t ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://host.docker.internal:3000 -I
 docker run -d -p 3001:3000 bkimminich/juice-shop
 ```
 
@@ -778,6 +844,9 @@ docker run -d -p 3001:3000 bkimminich/juice-shop
 | **Shift left** | Doing security earlier in the lifecycle |
 | **SAST** | Static testing — analyses source code |
 | **DAST** | Dynamic testing — attacks the running app |
+| **Taint analysis** | Advanced SAST that tracks untrusted input from source to sink (detects injection/XSS); a paid feature in SonarQube |
+| **Security Hotspot** | A security-sensitive spot SonarQube flags for human review (vs an auto-confirmed Issue) |
+| **Semgrep** | Free, open-source SAST tool whose rules catch injection and XSS |
 | **OWASP** | Non-profit publishing the Top 10 web risks |
 | **Injection** | Untrusted input altering a query/command |
 | **XSS** | Cross-Site Scripting — running attacker JS in a victim's browser |
