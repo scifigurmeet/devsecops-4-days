@@ -64,6 +64,21 @@ flowchart LR
 
 Everything from Day 1 is reused (Docker, Node.js, the VulnPortal project). Day 2 adds two tools.
 
+> [!IMPORTANT]
+> **🖥 Shell & path differences — read this first.** Docker commands that touch the file system or environment are shown for both **🐧 Linux/macOS** (bash) and **🪟 Windows CMD**. Commands not shown twice (e.g. `git`, `npm`, `node`, single-line `docker build`) are identical on both platforms. The differences are purely mechanical:
+>
+> | Concept | 🐧 Linux / macOS (bash) | 🪟 Windows (CMD) |
+> |---|---|---|
+> | Current folder | `$(pwd)` | `%cd%` |
+> | Multi-line command | end each line with `\` | keep it on **one line** |
+> | Set a variable | `export VAR=value` | `set VAR=value` |
+> | Read a variable | `$VAR` | `%VAR%` |
+> | Last exit code | `echo $?` | `echo %errorlevel%` |
+> | Mount the Docker socket | `/var/run/docker.sock` | `//var/run/docker.sock` |
+> | `host.docker.internal` | add `--add-host=host.docker.internal:host-gateway` | works natively — omit the flag |
+>
+> **PowerShell** users: current folder is `${PWD}`, variables are `$env:VAR`.
+
 | Tool | Purpose | Install |
 |---|---|---|
 | **Snyk CLI** | Scan dependencies for known CVEs | `npm install -g snyk` |
@@ -158,16 +173,23 @@ snyk monitor
 
 A free, self-hosted scanner that produces an HTML report. It runs well in Docker:
 
+**🐧 Linux / macOS**
 ```bash
 cd vulnportal
 mkdir -p odc-data odc-report
-
 docker run --rm \
   -v "$(pwd):/src" \
   -v "$(pwd)/odc-data:/usr/share/dependency-check/data" \
   owasp/dependency-check \
   --scan /src --format HTML --project "VulnPortal" --out /src/odc-report
 # Open odc-report/dependency-check-report.html in a browser
+```
+**🪟 Windows (CMD)**
+```bat
+cd vulnportal
+mkdir odc-data & mkdir odc-report
+docker run --rm -v "%cd%:/src" -v "%cd%/odc-data:/usr/share/dependency-check/data" owasp/dependency-check --scan /src --format HTML --project "VulnPortal" --out /src/odc-report
+REM Open odc-report\dependency-check-report.html in a browser
 ```
 
 > 🧯 **First run is slow.** Dependency-Check downloads the NVD (National Vulnerability Database) on first use. Mounting `odc-data` caches it so later runs are fast. For faster, more reliable downloads, get a free **NVD API key** and pass `--nvdApiKey <KEY>`.
@@ -284,10 +306,15 @@ flowchart LR
 
 ## 3.4 Catch leaks automatically — secret scanning with gitleaks
 
+**🐧 Linux / macOS**
 ```bash
 # Scan the whole git history of the current repo for committed secrets
 docker run --rm -v "$(pwd):/repo" zricethezav/gitleaks:latest \
   detect --source=/repo -v
+```
+**🪟 Windows (CMD)**
+```bat
+docker run --rm -v "%cd%:/repo" zricethezav/gitleaks:latest detect --source=/repo -v
 ```
 
 > ✅ **Expected:** if the original Day-1 `API_SECRET` was ever committed, gitleaks flags it with the file, commit, and line. Add gitleaks to CI to block future secret commits.
@@ -313,6 +340,7 @@ flowchart LR
 
 > ⚠️ **Dev mode is for learning only** — it runs in memory, unsealed, with a known root token. Never use dev mode in production.
 
+**🐧 Linux / macOS**
 ```bash
 docker run --rm -d --name vault \
   --cap-add=IPC_LOCK \
@@ -322,7 +350,15 @@ docker run --rm -d --name vault \
 
 # Point the CLI / app at this Vault
 export VAULT_ADDR='http://127.0.0.1:8200'
-export VAULT_TOKEN='root'
+export VAULT_TOKEN='root' 
+```
+**🪟 Windows (CMD)**
+```bat
+docker run --rm -d --name vault --cap-add=IPC_LOCK -e "VAULT_DEV_ROOT_TOKEN_ID=root" -p 8200:8200 hashicorp/vault
+
+REM Point the CLI / app at this Vault
+set VAULT_ADDR=http://127.0.0.1:8200
+set VAULT_TOKEN=root
 ```
 
 > ✅ **Expected:** the Vault UI is reachable at `http://localhost:8200` (token: `root`).
@@ -331,6 +367,7 @@ export VAULT_TOKEN='root'
 
 Using the CLI inside the container (or a local `vault` binary):
 
+**🐧 Linux / macOS**
 ```bash
 # Write the secret into Vault's key-value store
 docker exec -e VAULT_ADDR='http://127.0.0.1:8200' -e VAULT_TOKEN='root' vault \
@@ -339,6 +376,11 @@ docker exec -e VAULT_ADDR='http://127.0.0.1:8200' -e VAULT_TOKEN='root' vault \
 # Read it back
 docker exec -e VAULT_ADDR='http://127.0.0.1:8200' -e VAULT_TOKEN='root' vault \
   vault kv get secret/vulnportal
+```
+**🪟 Windows (CMD)**
+```bat
+docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=root vault vault kv put secret/vulnportal api_secret="S3cr3t-Pa55w0rd-DoNotCommit"
+docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=root vault vault kv get secret/vulnportal
 ```
 
 > ✅ **Expected:** Vault echoes the stored key/value. The secret now lives in Vault, not in `app.js`.
@@ -376,6 +418,7 @@ loadSecrets();
 
 In cloud (and often at large firms), the managed equivalent is **AWS Secrets Manager** (Azure has Key Vault; GCP has Secret Manager). Same idea, fully managed, with **built-in automatic rotation**.
 
+**🐧 Linux / macOS**
 ```bash
 # Store a secret
 aws secretsmanager create-secret \
@@ -383,6 +426,11 @@ aws secretsmanager create-secret \
   --secret-string "S3cr3t-Pa55w0rd-DoNotCommit"
 
 # Retrieve it
+aws secretsmanager get-secret-value --secret-id vulnportal/api_secret
+```
+**🪟 Windows (CMD)**
+```bat
+aws secretsmanager create-secret --name vulnportal/api_secret --secret-string "S3cr3t-Pa55w0rd-DoNotCommit"
 aws secretsmanager get-secret-value --secret-id vulnportal/api_secret
 ```
 
@@ -495,6 +543,7 @@ flowchart LR
 
 # 🧾 Day 2 Command Cheat-Sheet
 
+**🐧 Linux / macOS**
 ```bash
 # Dependency scanning
 npm audit --audit-level=high
@@ -502,18 +551,34 @@ snyk auth && snyk test --severity-threshold=high
 snyk monitor
 docker run --rm -v "$(pwd):/src" -v "$(pwd)/odc-data:/usr/share/dependency-check/data" \
   owasp/dependency-check --scan /src --format HTML --project "VulnPortal" --out /src/odc-report
-
 # Secret scanning
 docker run --rm -v "$(pwd):/repo" zricethezav/gitleaks:latest detect --source=/repo -v
-
 # Vault (dev mode)
 docker run --rm -d --name vault --cap-add=IPC_LOCK \
   -e 'VAULT_DEV_ROOT_TOKEN_ID=root' -p 8200:8200 hashicorp/vault
 export VAULT_ADDR='http://127.0.0.1:8200'; export VAULT_TOKEN='root'
 docker exec -e VAULT_ADDR -e VAULT_TOKEN vault vault kv put secret/vulnportal api_secret="..."
 docker exec -e VAULT_ADDR -e VAULT_TOKEN vault vault kv get secret/vulnportal
-
 # AWS Secrets Manager
+aws secretsmanager create-secret --name vulnportal/api_secret --secret-string "..."
+aws secretsmanager get-secret-value --secret-id vulnportal/api_secret
+```
+**🪟 Windows (CMD)**
+```bat
+REM Dependency scanning
+npm audit --audit-level=high
+snyk auth && snyk test --severity-threshold=high
+snyk monitor
+docker run --rm -v "%cd%:/src" -v "%cd%/odc-data:/usr/share/dependency-check/data" owasp/dependency-check --scan /src --format HTML --project "VulnPortal" --out /src/odc-report
+REM Secret scanning
+docker run --rm -v "%cd%:/repo" zricethezav/gitleaks:latest detect --source=/repo -v
+REM Vault (dev mode)
+docker run --rm -d --name vault --cap-add=IPC_LOCK -e "VAULT_DEV_ROOT_TOKEN_ID=root" -p 8200:8200 hashicorp/vault
+set VAULT_ADDR=http://127.0.0.1:8200
+set VAULT_TOKEN=root
+docker exec -e VAULT_ADDR=%VAULT_ADDR% -e VAULT_TOKEN=%VAULT_TOKEN% vault vault kv put secret/vulnportal api_secret="..."
+docker exec -e VAULT_ADDR=%VAULT_ADDR% -e VAULT_TOKEN=%VAULT_TOKEN% vault vault kv get secret/vulnportal
+REM AWS Secrets Manager
 aws secretsmanager create-secret --name vulnportal/api_secret --secret-string "..."
 aws secretsmanager get-secret-value --secret-id vulnportal/api_secret
 ```
