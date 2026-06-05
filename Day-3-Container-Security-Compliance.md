@@ -67,6 +67,21 @@ flowchart LR
 
 Reuses Docker, Node.js, and VulnPortal. Day 3 adds:
 
+> [!IMPORTANT]
+> **🖥 Shell & path differences — read this first.** Docker commands that touch the file system or environment are shown for both **🐧 Linux/macOS** (bash) and **🪟 Windows CMD**. Commands not shown twice (e.g. `git`, `npm`, `node`, single-line `docker build`) are identical on both platforms. The differences are purely mechanical:
+>
+> | Concept | 🐧 Linux / macOS (bash) | 🪟 Windows (CMD) |
+> |---|---|---|
+> | Current folder | `$(pwd)` | `%cd%` |
+> | Multi-line command | end each line with `\` | keep it on **one line** |
+> | Set a variable | `export VAR=value` | `set VAR=value` |
+> | Read a variable | `$VAR` | `%VAR%` |
+> | Last exit code | `echo $?` | `echo %errorlevel%` |
+> | Mount the Docker socket | `/var/run/docker.sock` | `//var/run/docker.sock` |
+> | `host.docker.internal` | add `--add-host=host.docker.internal:host-gateway` | works natively — omit the flag |
+>
+> **PowerShell** users: current folder is `${PWD}`, variables are `$env:VAR`.
+
 | Tool | Purpose | Install |
 |---|---|---|
 | **Trivy** | Scan images, filesystems & configs for vulnerabilities | via Docker (`aquasec/trivy`) |
@@ -143,23 +158,33 @@ flowchart LR
 
 ### 🧪 Lab 2.1 — Scan the image
 
+**🐧 Linux / macOS**
 ```bash
 # Scan the image we built (mount the docker socket so Trivy can read local images)
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image vulnportal:weak
 ```
+**🪟 Windows (CMD)**
+```bat
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image vulnportal:weak
+```
 
 > ✅ **Expected:** a table of vulnerabilities grouped by package, each with a **CVE**, **severity**, **installed version**, and **fixed version**. The `node:18` base will produce many findings.
 
 ### 🧪 Lab 2.2 — Make it CI-friendly
 
+**🐧 Linux / macOS**
 ```bash
 # Only fail on HIGH and CRITICAL, ignore unfixed ones (reduce noise)
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image \
   --severity HIGH,CRITICAL --ignore-unfixed \
   --exit-code 1 vulnportal:weak
+```
+**🪟 Windows (CMD)**
+```bat
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 vulnportal:weak
 ```
 
 | Flag | Effect |
@@ -171,12 +196,19 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
 
 ### 🧪 Lab 2.3 — Trivy also scans filesystems and Dockerfiles
 
+**🐧 Linux / macOS**
 ```bash
 # Scan project files (deps + secrets) without building an image
 docker run --rm -v "$(pwd):/src" aquasec/trivy:latest fs /src
-
 # Scan the Dockerfile itself for misconfigurations
 docker run --rm -v "$(pwd):/src" aquasec/trivy:latest config /src
+```
+**🪟 Windows (CMD)**
+```bat
+REM Scan project files (deps + secrets) without building an image
+docker run --rm -v "%cd%:/src" aquasec/trivy:latest fs /src
+REM Scan the Dockerfile itself for misconfigurations
+docker run --rm -v "%cd%:/src" aquasec/trivy:latest config /src
 ```
 
 > 💡 **One tool, many jobs:** Trivy does image, filesystem, config (IaC), and secret scanning — which is why it's a DevSecOps favourite.
@@ -265,16 +297,23 @@ CMD ["node", "app.js"]
 
 Rebuild and re-scan:
 
+**🐧 Linux / macOS**
 ```bash
 docker build -t vulnportal:secure .
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity HIGH,CRITICAL vulnportal:secure
+```
+**🪟 Windows (CMD)**
+```bat
+docker build -t vulnportal:secure .
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL vulnportal:secure
 ```
 
 > ✅ **Expected:** the `alpine` base produces **far fewer** findings than `node:18`, and the image is dramatically smaller. Compare with `docker images` to see the size drop.
 
 ### 🧪 Run it with extra runtime hardening
 
+**🐧 Linux / macOS**
 ```bash
 docker run -d --name portal \
   --read-only --cap-drop ALL \
@@ -282,6 +321,10 @@ docker run -d --name portal \
   -p 3000:3000 \
   -e VAULT_ADDR -e VAULT_TOKEN \
   vulnportal:secure
+```
+**🪟 Windows (CMD)**
+```bat
+docker run -d --name portal --read-only --cap-drop ALL --tmpfs /tmp -p 3000:3000 -e VAULT_ADDR=%VAULT_ADDR% -e VAULT_TOKEN=%VAULT_TOKEN% vulnportal:secure
 ```
 
 > 💡 **Layered defence:** the secure Dockerfile hardens the *image*; `--read-only` and `--cap-drop ALL` harden the *running container*. Both matter.
@@ -311,14 +354,21 @@ flowchart LR
 
 ### 🧪 Lab 4.1 — Generate an SBOM
 
+**🐧 Linux / macOS**
 ```bash
 # With Trivy
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --format cyclonedx -o /dev/stdout vulnportal:secure
-
 # Or with Syft
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   anchore/syft:latest vulnportal:secure
+```
+**🪟 Windows (CMD)**
+```bat
+REM With Trivy (omit -o so it prints to the console)
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --format cyclonedx vulnportal:secure
+REM Or with Syft
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock anchore/syft:latest vulnportal:secure
 ```
 
 > 💡 **Why an SBOM matters:** when the *next* Log4Shell is announced, you can instantly answer "are we affected?" by searching every SBOM — instead of guessing.
@@ -341,6 +391,7 @@ flowchart LR
 
 ### 🧪 Lab 5.1 — Audit the Docker host against CIS (Docker Bench)
 
+**🐧 Linux / macOS**
 ```bash
 docker run --rm --net host --pid host --userns host --cap-add audit_control \
   -v /var/lib:/var/lib:ro \
@@ -348,16 +399,22 @@ docker run --rm --net host --pid host --userns host --cap-add audit_control \
   -v /etc:/etc:ro \
   docker/docker-bench-security
 ```
+> 🪟 **Windows:** Docker Bench audits a *Linux Docker host*. On Docker Desktop it targets the internal WSL2 Linux VM, so run this command from **Git Bash or a WSL2 shell** (the Linux-style `/var/...` paths don't translate cleanly in CMD). If that's not available, use the Trivy `--compliance` scan in Lab 5.2 instead — it works identically from CMD.
 
 > ✅ **Expected:** a long checklist of `[PASS]`, `[WARN]`, `[INFO]`, `[NOTE]` items mapped to CIS Docker Benchmark sections (host config, daemon config, container runtime, etc.).
 > 🧯 **Permissions:** this audit needs host-level access; it runs best on a Linux host or a Linux VM rather than inside restricted environments.
 
 ### 🧪 Lab 5.2 — Compliance report from Trivy
 
+**🐧 Linux / macOS**
 ```bash
 # Trivy can report directly against a compliance spec
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --compliance docker-cis-1.6.0 vulnportal:secure
+```
+**🪟 Windows (CMD)**
+```bat
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --compliance docker-cis-1.6.0 vulnportal:secure
 ```
 
 ## 5.2 Audit logs (OWASP A09)
@@ -471,34 +528,43 @@ flowchart LR
 
 # 🧾 Day 3 Command Cheat-Sheet
 
+**🐧 Linux / macOS**
 ```bash
 # Build images
 docker build -t vulnportal:weak .
 docker build -t vulnportal:secure .
 docker images                                  # compare sizes
-
 # Trivy scans
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  aquasec/trivy:latest image vulnportal:weak
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:secure
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image vulnportal:weak
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:secure
 docker run --rm -v "$(pwd):/src" aquasec/trivy:latest fs /src
 docker run --rm -v "$(pwd):/src" aquasec/trivy:latest config /src
-
 # SBOM
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  anchore/syft:latest vulnportal:secure
-
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:latest vulnportal:secure
 # Hardened runtime
-docker run -d --name portal --read-only --cap-drop ALL --tmpfs /tmp \
-  -p 3000:3000 vulnportal:secure
-
-# Compliance / CIS
+docker run -d --name portal --read-only --cap-drop ALL --tmpfs /tmp -p 3000:3000 vulnportal:secure
+# Compliance / CIS (Docker Bench: run from WSL/Git Bash)
 docker run --rm --net host --pid host --cap-add audit_control \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro -v /etc:/etc:ro \
-  docker/docker-bench-security
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  aquasec/trivy:latest image --compliance docker-cis-1.6.0 vulnportal:secure
+  -v /var/run/docker.sock:/var/run/docker.sock:ro -v /etc:/etc:ro docker/docker-bench-security
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --compliance docker-cis-1.6.0 vulnportal:secure
+```
+**🪟 Windows (CMD)**
+```bat
+REM Build images
+docker build -t vulnportal:weak .
+docker build -t vulnportal:secure .
+docker images
+REM Trivy scans
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image vulnportal:weak
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:secure
+docker run --rm -v "%cd%:/src" aquasec/trivy:latest fs /src
+docker run --rm -v "%cd%:/src" aquasec/trivy:latest config /src
+REM SBOM
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock anchore/syft:latest vulnportal:secure
+REM Hardened runtime
+docker run -d --name portal --read-only --cap-drop ALL --tmpfs /tmp -p 3000:3000 vulnportal:secure
+REM Compliance: Docker Bench needs WSL/Git Bash; Trivy compliance works from CMD:
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --compliance docker-cis-1.6.0 vulnportal:secure
 ```
 
 ---
