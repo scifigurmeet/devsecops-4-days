@@ -61,6 +61,21 @@ flowchart LR
 
 Everything from Days 1–3 is reused: the hardened VulnPortal code, the hardened multi-stage Dockerfile, Vault, and the scanners (SonarQube/Semgrep, Snyk/npm audit, gitleaks, Trivy). No new tools are required; today is integration.
 
+> [!IMPORTANT]
+> **🖥 Shell & path differences — read this first.** Docker commands that touch the file system or environment are shown for both **🐧 Linux/macOS** (bash) and **🪟 Windows CMD**. Commands not shown twice (e.g. `git`, `npm`, `node`, single-line `docker build`) are identical on both platforms. The differences are purely mechanical:
+>
+> | Concept | 🐧 Linux / macOS (bash) | 🪟 Windows (CMD) |
+> |---|---|---|
+> | Current folder | `$(pwd)` | `%cd%` |
+> | Multi-line command | end each line with `\` | keep it on **one line** |
+> | Set a variable | `export VAR=value` | `set VAR=value` |
+> | Read a variable | `$VAR` | `%VAR%` |
+> | Last exit code | `echo $?` | `echo %errorlevel%` |
+> | Mount the Docker socket | `/var/run/docker.sock` | `//var/run/docker.sock` |
+> | `host.docker.internal` | add `--add-host=host.docker.internal:host-gateway` | works natively — omit the flag |
+>
+> **PowerShell** users: current folder is `${PWD}`, variables are `$env:VAR`.
+
 > 💡 If any earlier artifact is missing (e.g., the hardened `Dockerfile` or `.dockerignore`), recreate it from the Day 2/Day 3 sheets before starting.
 
 ---
@@ -213,6 +228,7 @@ flowchart LR
 
 ### 🧪 Lab 3.1 — Run the portal wired to Vault
 
+**🐧 Linux / macOS**
 ```bash
 # Vault running from Day 2 with secret/vulnportal -> api_secret
 export VAULT_ADDR='http://127.0.0.1:8200'
@@ -224,6 +240,13 @@ docker run -d --name secure-portal \
   -e VAULT_ADDR=http://host.docker.internal:8200 \
   -e VAULT_TOKEN=$VAULT_TOKEN \
   vulnportal:secure
+```
+**🪟 Windows (CMD)**
+```bat
+REM Vault running from Day 2 with secret/vulnportal -> api_secret
+set VAULT_TOKEN=root
+
+docker run -d --name secure-portal --read-only --cap-drop ALL --tmpfs /tmp -p 3000:3000 -e VAULT_ADDR=http://host.docker.internal:8200 -e VAULT_TOKEN=%VAULT_TOKEN% vulnportal:secure
 ```
 
 > ✅ **Expected:** the app logs `Secret loaded from Vault` and starts. Confirm with `git grep -i secret` and `docker history vulnportal:secure` that **no secret value** appears in the code or image layers.
@@ -238,16 +261,25 @@ Image scanning (Day 3) becomes **Gate 4**: the build is blocked if the image has
 
 ### 🧪 Lab 4.1 — Prove the gate works both ways
 
+**🐧 Linux / macOS**
 ```bash
 # The hardened image should PASS the gate (few/no HIGH-CRITICAL, exit 0)
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:secure
 echo "Exit: $?"   # expect 0
-
 # The old weak image should FAIL the gate (exit 1)
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:weak
 echo "Exit: $?"   # expect non-zero
+```
+**🪟 Windows (CMD)**
+```bat
+REM The hardened image should PASS the gate (exit 0)
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:secure
+echo Exit: %errorlevel%
+REM The old weak image should FAIL the gate (non-zero)
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:weak
+echo Exit: %errorlevel%
 ```
 
 > 💡 **This contrast is the whole point:** the *same gate* lets the secure image through and blocks the weak one — automatically, with no human judgment required at release time.
@@ -331,26 +363,41 @@ flowchart LR
 
 # 🧾 Day 4 Command Cheat-Sheet
 
+**🐧 Linux / macOS**
 ```bash
 # Run the portal wired to Vault (no secret in code/image)
 docker run -d --name secure-portal --read-only --cap-drop ALL --tmpfs /tmp \
   -p 3000:3000 -e VAULT_ADDR=http://host.docker.internal:8200 -e VAULT_TOKEN=$VAULT_TOKEN \
   vulnportal:secure
-
 # Prove no secret is baked in
 git grep -i secret
 docker history vulnportal:secure
-
 # Image-scan gate — secure passes, weak fails
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:secure ; echo $?
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:weak   ; echo $?
-
 # Local dry-run of each gate before pushing
 docker run --rm -v "$(pwd):/repo" zricethezav/gitleaks:latest detect --source=/repo -v
 npm audit --audit-level=high
 docker run --rm -v "$(pwd):/src" aquasec/trivy:latest config /src
+```
+**🪟 Windows (CMD)**
+```bat
+REM Run the portal wired to Vault (no secret in code/image)
+docker run -d --name secure-portal --read-only --cap-drop ALL --tmpfs /tmp -p 3000:3000 -e VAULT_ADDR=http://host.docker.internal:8200 -e VAULT_TOKEN=%VAULT_TOKEN% vulnportal:secure
+REM Prove no secret is baked in
+git grep -i secret
+docker history vulnportal:secure
+REM Image-scan gate — secure passes, weak fails
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:secure
+echo %errorlevel%
+docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 vulnportal:weak
+echo %errorlevel%
+REM Local dry-run of each gate before pushing
+docker run --rm -v "%cd%:/repo" zricethezav/gitleaks:latest detect --source=/repo -v
+npm audit --audit-level=high
+docker run --rm -v "%cd%:/src" aquasec/trivy:latest config /src
 ```
 
 ---
